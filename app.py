@@ -17,6 +17,7 @@ import zipfile
 
 import numpy as np
 import cv2
+import requests
 import streamlit as st
 from PIL import Image, ImageDraw
 from rembg import remove, new_session
@@ -53,31 +54,62 @@ def px_to_mm(px: float) -> float:
 
 
 # ------------------------------------------------------------------
-# 互動計數器（瀏覽 / 讚 / 分享）——存於本機 stats.json
+# 互動計數器（瀏覽 / 讚 / 分享）
+# 用免費計數服務 abacus 永久保存（雲端重部署也不歸零）；
+# 連不上時後備到本機 stats.json，本機開發仍可用。
 # ------------------------------------------------------------------
+COUNTER_BASE = "https://abacus.jasoncameron.dev"
+COUNTER_NS = "photostudio-ginohung-v1"         # 計數命名空間（唯一）
 STATS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "stats.json")
+_STAT_KEYS = ("views", "likes", "shares")
 
 
-def load_stats():
+def _api_get(key):
+    r = requests.get(f"{COUNTER_BASE}/get/{COUNTER_NS}/{key}", timeout=5)
+    return int(r.json().get("value", 0)) if r.status_code == 200 else 0
+
+
+def _api_hit(key):
+    r = requests.get(f"{COUNTER_BASE}/hit/{COUNTER_NS}/{key}", timeout=5)
+    r.raise_for_status()
+    return int(r.json().get("value", 0))
+
+
+def _load_file():
     try:
         with open(STATS_PATH, "r", encoding="utf-8") as f:
             s = json.load(f)
     except Exception:
         s = {}
-    return {"views": s.get("views", 0), "likes": s.get("likes", 0),
-            "shares": s.get("shares", 0)}
+    return {k: int(s.get(k, 0)) for k in _STAT_KEYS}
 
 
-def bump_stat(key, n=1):
-    s = load_stats()
-    s[key] = s.get(key, 0) + n
+def _save_file(stats):
     try:
         with open(STATS_PATH, "w", encoding="utf-8") as f:
-            json.dump(s, f)
+            json.dump(stats, f)
     except Exception:
         pass
-    return s
+
+
+def load_stats():
+    """讀取三個計數（優先計數服務，失敗則讀本機檔）。"""
+    try:
+        return {k: _api_get(k) for k in _STAT_KEYS}
+    except Exception:
+        return _load_file()
+
+
+def bump_stat(key):
+    """計數 +1，回傳新值（服務失敗則寫本機檔）。"""
+    try:
+        return _api_hit(key)
+    except Exception:
+        s = _load_file()
+        s[key] = s.get(key, 0) + 1
+        _save_file(s)
+        return s[key]
 
 
 # 相片實際尺寸（寬 x 高，像素）
@@ -717,11 +749,15 @@ h3 { font-size: 1.6rem !important; }
 st.title("📸 PhotoStudio — AI 去背 × 尺寸排版")
 st.caption("護照大頭照 4x6 排版　|　LINE 貼圖規範輸出　·　300 DPI 印刷標準")
 
-# ----- 互動計數器（瀏覽 / 讚 / 分享）——置於右側 -----
+# ----- 互動計數器（瀏覽 / 讚 / 分享）-----
+# 每個 session 只讀一次計數服務（避免每次互動都連網變慢），
+# 瀏覽在進站時 +1；按讚/分享點擊時 +1 並就地更新顯示。
+if "stats" not in st.session_state:
+    st.session_state["stats"] = load_stats()
 if not st.session_state.get("counted_view"):
     st.session_state["counted_view"] = True
-    bump_stat("views")
-_stats = load_stats()
+    st.session_state["stats"]["views"] = bump_stat("views")
+_stats = st.session_state["stats"]
 with st.sidebar:
     st.header("📊 互動統計")
     st.metric("👁️ 瀏覽人數", _stats["views"])
@@ -733,15 +769,15 @@ with st.sidebar:
             st.toast("你已經按過讚了，謝謝！")
         else:
             st.session_state["has_liked"] = True
-            bump_stat("likes")
+            st.session_state["stats"]["likes"] = bump_stat("likes")
             st.rerun()
     if _b2.button("🔗 分享", use_container_width=True):
-        bump_stat("shares")
+        st.session_state["stats"]["shares"] = bump_stat("shares")
         st.session_state["show_share"] = True
         st.rerun()
     if st.session_state.get("show_share"):
         st.caption("複製下方網址分享：")
-        st.code("http://localhost:8501", language=None)
+        st.code("https://photostudio-ginohung.streamlit.app", language=None)
 
 # 功能選擇
 mode = st.radio(
