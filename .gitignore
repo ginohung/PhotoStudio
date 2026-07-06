@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.Python
+
+# 虛擬環境
+.venv/
+venv/
+env/
+
+# Streamlit / 執行期產物
+stats.json
+.streamlit/secrets.toml
+
+# 作業系統
+.DS_Store
+Thumbs.db
+
+# 編輯器
+.vscode/
+.idea/

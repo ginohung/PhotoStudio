@@ -1,0 +1,7 @@
+streamlit>=1.33
+rembg>=2.0.50
+Pillow>=10.0
+onnxruntime>=1.17
+numpy>=1.24
+opencv-python-headless>=4.9
+streamlit-image-coordinates>=0.1.9
