@@ -900,7 +900,7 @@ if mode.startswith("護照"):
                 st.success("✅ 已偵測到人臉，可用下方滑桿即時微調定位。")
 
             gg = id_guide_geom(spec, photo_size)
-            DISP_W = 380  # 單張預覽顯示寬（px）
+            DISP_W = 340  # 單張預覽顯示寬（px，固定；勿超過欄寬以免抖動）
 
             # --- 狀態初始化（務必在建立 widget 之前）---
             lo_h, hi_h = spec["head_min"] - 0.4, spec["head_max"] + 0.4
@@ -968,19 +968,15 @@ if mode.startswith("護照"):
 
             st.markdown("👆 **在下方預覽圖上點一下**，臉部中心就會移到該點"
                         "（之後可再用滑桿細調）")
-            pcol1, pcol2 = st.columns([1, 2])
-            with pcol1:
-                streamlit_image_coordinates(preview, width=DISP_W,
-                                            key="pp_click")
-                st.caption("單張定位預覽（可點擊）")
+            # 固定寬、全寬區塊（勿放進窄欄，否則 image-coordinates 會抖動）
+            streamlit_image_coordinates(preview, width=DISP_W, key="pp_click")
+            st.caption("單張定位預覽（可點擊）")
 
             # 相片邊對邊、零間距、零內邊距 → 內部裁切線對齊成整條直線（一刀裁）
             sheet, count, cols, rows = build_4x6_sheet(
                 single, photo_size, edge_margin=0, spacing=0
             )
-            with pcol2:
-                st.image(sheet, caption=f"4x6 排版（{count} 張）",
-                         use_container_width=True)
+            st.image(sheet, width=760, caption=f"4x6 排版（{count} 張）")
 
             st.info(f"共可排入 {count} 張（{cols} 欄 × {rows} 列，橫式，相片緊靠一刀裁）。")
 
