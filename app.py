@@ -229,12 +229,25 @@ _YUNET_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "models", "face_detection_yunet_2023mar.onnx",
 )
+_YUNET_URL = ("https://github.com/opencv/opencv_zoo/raw/main/models/"
+              "face_detection_yunet/face_detection_yunet_2023mar.onnx")
+
+
+def _ensure_yunet():
+    """YuNet 模型不存在時自動下載（雲端部署不必把二進位檔放進 repo）。"""
+    if not os.path.exists(_YUNET_PATH):
+        os.makedirs(os.path.dirname(_YUNET_PATH), exist_ok=True)
+        r = requests.get(_YUNET_URL, timeout=60)
+        r.raise_for_status()
+        with open(_YUNET_PATH, "wb") as f:
+            f.write(r.content)
+    return _YUNET_PATH
 
 
 @st.cache_resource(show_spinner=False)
 def load_face_detector():
-    """載入並快取 YuNet 人臉偵測器。"""
-    return cv2.FaceDetectorYN.create(_YUNET_PATH, "", (320, 320),
+    """載入並快取 YuNet 人臉偵測器（首次會自動下載模型）。"""
+    return cv2.FaceDetectorYN.create(_ensure_yunet(), "", (320, 320),
                                      score_threshold=0.6)
 
 
