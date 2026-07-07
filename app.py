@@ -208,11 +208,19 @@ def open_normalized(uploaded_file) -> Image.Image:
     """
     img = Image.open(uploaded_file)
     img.load()  # 先載入，避免延後讀取造成檔案指標問題
+    icc = img.info.get("icc_profile")   # 原圖內嵌 ICC（若有）
+    converted = False
     if img.mode in ("LA", "PA") or (img.mode == "P" and "transparency" in img.info):
         img = img.convert("RGBA")
+        converted = True
     elif img.mode not in ("RGB", "RGBA"):
         img = img.convert("RGB")  # CMYK / L / P 等一律轉 RGB
-    return _limit_size(img)
+        converted = True
+    img = _limit_size(img)
+    # 只在「色彩模式沒被轉換」時保留 ICC，避免把 CMYK 的描述檔錯嵌到 RGB 資料
+    if icc and not converted:
+        img.info["icc_profile"] = icc
+    return img
 
 
 def flatten_to_white(rgba: Image.Image) -> Image.Image:
@@ -753,21 +761,26 @@ def draw_cells(img_rgb, cells):
 # ------------------------------------------------------------------
 # 下載用：影像 → BytesIO
 # ------------------------------------------------------------------
-def image_to_bytes(img: Image.Image, fmt: str) -> bytes:
-    """將 PIL 影像編碼為指定格式的 bytes（內嵌 300 DPI 資訊）。"""
+def image_to_bytes(img: Image.Image, fmt: str, icc: bytes = None) -> bytes:
+    """
+    將 PIL 影像編碼為指定格式的 bytes（內嵌 300 DPI）。
+    icc：原圖 ICC 描述檔（bytes），會原樣嵌回輸出以忠實保留色彩。
+    （PDF 因 Pillow 不支援嵌 ICC，故不帶；色彩關鍵請用 TIFF/JPG。）
+    """
     buf = io.BytesIO()
     fmt = fmt.upper()
+    kw = {"icc_profile": icc} if icc else {}
     if fmt in ("JPG", "JPEG"):
         img.convert("RGB").save(buf, format="JPEG", quality=95,
-                                dpi=(DPI, DPI))
+                                dpi=(DPI, DPI), **kw)
     elif fmt == "TIFF":
         img.convert("RGB").save(buf, format="TIFF", dpi=(DPI, DPI),
-                                compression="tiff_lzw")
+                                compression="tiff_lzw", **kw)
     elif fmt == "PDF":
         img.convert("RGB").save(buf, format="PDF", resolution=DPI)
     elif fmt == "PNG":
         # optimize 壓縮，確保單張 LINE 貼圖遠小於 1MB
-        img.save(buf, format="PNG", dpi=(DPI, DPI), optimize=True)
+        img.save(buf, format="PNG", dpi=(DPI, DPI), optimize=True, **kw)
     else:
         raise ValueError(f"不支援的格式：{fmt}")
     buf.seek(0)
@@ -865,6 +878,10 @@ if mode.startswith("護照"):
         )
     with col_b:
         out_fmt = st.selectbox("下載格式", ["JPG", "TIFF", "PDF"])
+        if out_fmt == "PDF":
+            st.caption("⚠️ PDF 不嵌 ICC；色彩關鍵請用 TIFF（無損）或 JPG。")
+        else:
+            st.caption("✅ 會原樣嵌回原圖 ICC，色彩忠實保留。")
 
     size_key = "1inch" if size_label.startswith("1") else "2inch"
     spec = SIZE_SPECS[size_key]
@@ -882,9 +899,10 @@ if mode.startswith("護照"):
 
     # ---- 模式 C：不去背，直接把相館成品縮放排版 ----
     elif is_no_bg:
-        src = open_normalized(uploaded).convert("RGB")
+        src = open_normalized(uploaded)
+        _icc = src.info.get("icc_profile")     # 保留原圖 ICC
         st.image(src, caption="原始圖片（相館已處理）", width=240)
-        single = resize_cover(src, *photo_size)   # 縮放填滿相片框
+        single = resize_cover(src.convert("RGB"), *photo_size)  # 縮放填滿相片框
         sheet, count, cols, rows = build_4x6_sheet(
             single, photo_size, edge_margin=0, spacing=0)
         pcol1, pcol2 = st.columns([1, 2])
@@ -893,8 +911,8 @@ if mode.startswith("護照"):
         with pcol2:
             st.image(sheet, width=760, caption=f"4x6 排版（{count} 張）")
         st.info(f"共 {count} 張（{cols} 欄 × {rows} 列，橫式）。"
-                "不去背模式：直接縮放至相片框排版。")
-        data = image_to_bytes(sheet, out_fmt)
+                "不去背模式：直接縮放至相片框排版，色彩數值不變。")
+        data = image_to_bytes(sheet, out_fmt, icc=_icc)
         mime = {"JPG": "image/jpeg", "TIFF": "image/tiff",
                 "PDF": "application/pdf"}[out_fmt]
         st.download_button(f"⬇️ 下載 4x6 排版（{out_fmt}）", data,
@@ -1045,7 +1063,7 @@ if mode.startswith("護照"):
 
             st.info(f"共可排入 {count} 張（{cols} 欄 × {rows} 列，橫式，相片緊靠一刀裁）。")
 
-            data = image_to_bytes(sheet, out_fmt)
+            data = image_to_bytes(sheet, out_fmt, icc=src.info.get("icc_profile"))
             mime = {"JPG": "image/jpeg", "TIFF": "image/tiff",
                     "PDF": "application/pdf"}[out_fmt]
             st.download_button(
