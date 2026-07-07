@@ -131,21 +131,35 @@ SIZE_SPECS = {
 # ------------------------------------------------------------------
 # rembg 模型：以 cache_resource 快取，避免每次互動重新載入
 # ------------------------------------------------------------------
-# 上傳圖片最長邊上限（省記憶體；對護照/貼圖輸出解析度已足夠）
-MAX_INPUT_SIDE = 1800
+# 上傳圖片最長邊上限（HF Spaces 記憶體大，可放寬以保品質）
+MAX_INPUT_SIDE = 2400
+
+# 可選去背模型（顯示名 → rembg 模型代號）
+REMBG_MODELS = {
+    "髮絲級 birefnet-portrait（最佳、較慢）": "birefnet-portrait",
+    "高品質 isnet（推薦、快）": "isnet-general-use",
+    "人像 u2net_human_seg": "u2net_human_seg",
+    "輕量 u2netp（最快省資源）": "u2netp",
+}
+# 預設模型可用環境變數覆寫（HF Spaces 記憶體大→設 birefnet-portrait；
+# 1GB 的 Streamlit Cloud 不設→用輕量 u2netp 保持穩定）
+DEFAULT_REMBG_MODEL = os.environ.get("REMBG_DEFAULT", "u2netp")
+if DEFAULT_REMBG_MODEL not in REMBG_MODELS.values():
+    DEFAULT_REMBG_MODEL = "u2netp"
 
 
 @st.cache_resource(show_spinner=False)
-def load_rembg_session():
-    """載入並快取 rembg 去背模型。用輕量 u2netp 以降低雲端記憶體用量。"""
-    return new_session("u2netp")
+def load_rembg_session(model_name: str):
+    """載入並快取指定 rembg 去背模型（每個模型各自快取）。"""
+    return new_session(model_name)
 
 
-def remove_background(img: Image.Image) -> Image.Image:
+def remove_background(img: Image.Image,
+                      model_name: str = DEFAULT_REMBG_MODEL) -> Image.Image:
     """對 PIL 影像去背，回傳帶透明通道的 RGBA 影像。"""
-    session = load_rembg_session()
+    session = load_rembg_session(model_name)
     out = remove(img, session=session).convert("RGBA")
-    gc.collect()   # 主動釋放，避免雲端 1GB 記憶體累積爆掉
+    gc.collect()
     return out
 
 
@@ -499,9 +513,10 @@ def fit_to_line_canvas(rgba: Image.Image):
     return canvas, info
 
 
-def process_line_sticker(uploaded_img: Image.Image):
+def process_line_sticker(uploaded_img: Image.Image,
+                         model_name: str = DEFAULT_REMBG_MODEL):
     """LINE 貼圖 AI 去背主流程：AI 去背→套 LINE 規範畫布。"""
-    return fit_to_line_canvas(remove_background(uploaded_img))
+    return fit_to_line_canvas(remove_background(uploaded_img, model_name))
 
 
 def _foreground_mask(img_rgb, bg_colors, tol):
@@ -799,6 +814,15 @@ with st.sidebar:
         st.caption("複製下方網址分享：")
         st.code("https://photostudio-ginohung.streamlit.app", language=None)
 
+    st.divider()
+    st.subheader("🪄 去背模型")
+    _mlabels = list(REMBG_MODELS.keys())
+    _default_idx = list(REMBG_MODELS.values()).index(DEFAULT_REMBG_MODEL)
+    _model_label = st.selectbox("品質 / 速度", _mlabels, index=_default_idx,
+                                key="rembg_model_label")
+    rembg_model = REMBG_MODELS[_model_label]
+    st.caption("髮絲級最自然但較慢；isnet 品質好又快。首次使用該模型會先下載。")
+
 # 功能選擇
 mode = st.radio(
     "選擇功能",
@@ -844,7 +868,7 @@ if mode.startswith("護照"):
         btn_label = "🚀 開始去背並偵測人臉" if need_run else "🔄 重新去背偵測"
         if st.button(btn_label, type="primary"):
             with st.spinner("AI 去背與人臉偵測中，請稍候…"):
-                rgba = remove_background(src)
+                rgba = remove_background(src, rembg_model)
                 metrics = detect_head_metrics(rgba)
             st.session_state["pp_rgba"] = rgba
             st.session_state["pp_metrics"] = metrics
@@ -984,7 +1008,8 @@ else:
                 results = []
                 prog = st.progress(0.0, text="AI 去背中…")
                 for i, f in enumerate(files):
-                    sticker, info = process_line_sticker(open_normalized(f))
+                    sticker, info = process_line_sticker(
+                        open_normalized(f), rembg_model)
                     results.append((f.name, sticker, info))
                     prog.progress((i + 1) / len(files),
                                   text=f"AI 去背中… {i + 1}/{len(files)}")
