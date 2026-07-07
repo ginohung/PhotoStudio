@@ -870,25 +870,90 @@ if mode.startswith("護照"):
     spec = SIZE_SPECS[size_key]
     photo_size = spec["photo"]
 
+    bg_method = st.radio(
+        "去背方式",
+        ["AI 去背", "滴管取色去背（純色背景）", "不去背（相館已處理，直接排版）"],
+        horizontal=True, key="pp_bg_method")
+    is_no_bg = bg_method.startswith("不去背")
+    is_dropper = bg_method.startswith("滴管")
+
     if uploaded is None:
         st.info("請先於上方上傳一張人物照片。")
+
+    # ---- 模式 C：不去背，直接把相館成品縮放排版 ----
+    elif is_no_bg:
+        src = open_normalized(uploaded).convert("RGB")
+        st.image(src, caption="原始圖片（相館已處理）", width=240)
+        single = resize_cover(src, *photo_size)   # 縮放填滿相片框
+        sheet, count, cols, rows = build_4x6_sheet(
+            single, photo_size, edge_margin=0, spacing=0)
+        pcol1, pcol2 = st.columns([1, 2])
+        with pcol1:
+            st.image(single, width=260, caption="單張")
+        with pcol2:
+            st.image(sheet, width=760, caption=f"4x6 排版（{count} 張）")
+        st.info(f"共 {count} 張（{cols} 欄 × {rows} 列，橫式）。"
+                "不去背模式：直接縮放至相片框排版。")
+        data = image_to_bytes(sheet, out_fmt)
+        mime = {"JPG": "image/jpeg", "TIFF": "image/tiff",
+                "PDF": "application/pdf"}[out_fmt]
+        st.download_button(f"⬇️ 下載 4x6 排版（{out_fmt}）", data,
+                           file_name=f"passport_4x6_{size_key}.{out_fmt.lower()}",
+                           mime=mime)
+
+    # ---- 模式 A/B：AI 去背 或 滴管取色去背（都走頭部定位流程）----
     else:
         src = open_normalized(uploaded)
         st.image(src, caption="原始圖片", width=240)
 
+        # 滴管模式：先在原圖點背景取色
+        pp_colors, pp_tol = [], 40
+        if is_dropper:
+            st.session_state.setdefault("pp_colors", {})
+            pp_colors = st.session_state["pp_colors"].setdefault(
+                uploaded.name, [])
+            pp_tol = st.slider("容差（越大移除越多相近色）", 5, 150, 40, 1,
+                               key="pp_tol")
+            st.caption("👆 點原圖**背景**取色（可多次點不同區域累加）")
+            _pk = streamlit_image_coordinates(src, width=340, key="pp_pick")
+            if _pk and _pk.get("unix_time") != st.session_state.get("pp_pick_t"):
+                st.session_state["pp_pick_t"] = _pk["unix_time"]
+                _rw = _pk.get("width") or 340
+                _rh = _pk.get("height") or 340
+                _nx = min(max(int(_pk["x"] * src.width / _rw), 0), src.width - 1)
+                _ny = min(max(int(_pk["y"] * src.height / _rh), 0), src.height - 1)
+                pp_colors.append(tuple(int(c) for c in src.convert("RGB")
+                                       .getpixel((_nx, _ny))))
+            if pp_colors:
+                st.caption("已取色：" +
+                           "　".join("#%02X%02X%02X" % c for c in pp_colors))
+            _dc1, _dc2 = st.columns(2)
+            if _dc1.button("↩ 移除上一個取色") and pp_colors:
+                pp_colors.pop()
+                st.rerun()
+            if _dc2.button("🗑 清除全部取色"):
+                pp_colors.clear()
+                st.rerun()
+
         # 第一階段：去背 + 人臉偵測（結果存 session_state，避免調滑桿時重跑）
-        need_run = st.session_state.get("pp_name") != uploaded.name
+        pp_key = (uploaded.name, bg_method)
+        need_run = st.session_state.get("pp_key") != pp_key
         btn_label = "🚀 開始去背並偵測人臉" if need_run else "🔄 重新去背偵測"
         if st.button(btn_label, type="primary"):
-            with st.spinner("AI 去背與人臉偵測中，請稍候…"):
-                rgba = remove_background(src, rembg_model)
+            with st.spinner("去背與人臉偵測中，請稍候…"):
+                if is_dropper:
+                    rgba = (remove_by_colors(src, pp_colors, pp_tol)
+                            if pp_colors else src.convert("RGBA"))
+                else:
+                    rgba = remove_background(src, rembg_model)
                 metrics = detect_head_metrics(rgba)
             st.session_state["pp_rgba"] = rgba
             st.session_state["pp_metrics"] = metrics
             st.session_state["pp_name"] = uploaded.name
+            st.session_state["pp_key"] = pp_key
 
         # 第二階段：已處理 → 顯示微調滑桿 + 即時預覽（不再重跑去背）
-        if st.session_state.get("pp_name") == uploaded.name \
+        if st.session_state.get("pp_key") == pp_key \
                 and "pp_rgba" in st.session_state:
             rgba = st.session_state["pp_rgba"]
             metrics = st.session_state["pp_metrics"]
