@@ -14,6 +14,7 @@ import os
 import math
 import json
 import zipfile
+import gc
 
 import numpy as np
 import cv2
@@ -130,16 +131,22 @@ SIZE_SPECS = {
 # ------------------------------------------------------------------
 # rembg 模型：以 cache_resource 快取，避免每次互動重新載入
 # ------------------------------------------------------------------
+# 上傳圖片最長邊上限（省記憶體；對護照/貼圖輸出解析度已足夠）
+MAX_INPUT_SIDE = 1800
+
+
 @st.cache_resource(show_spinner=False)
 def load_rembg_session():
-    """載入並快取 rembg 去背模型 (u2net)。"""
-    return new_session("u2net")
+    """載入並快取 rembg 去背模型。用輕量 u2netp 以降低雲端記憶體用量。"""
+    return new_session("u2netp")
 
 
 def remove_background(img: Image.Image) -> Image.Image:
     """對 PIL 影像去背，回傳帶透明通道的 RGBA 影像。"""
     session = load_rembg_session()
-    return remove(img, session=session).convert("RGBA")
+    out = remove(img, session=session).convert("RGBA")
+    gc.collect()   # 主動釋放，避免雲端 1GB 記憶體累積爆掉
+    return out
 
 
 # ------------------------------------------------------------------
@@ -168,19 +175,30 @@ def resize_contain(img: Image.Image, max_w: int, max_h: int) -> Image.Image:
     return img.resize((new_w, new_h), Image.LANCZOS)
 
 
+def _limit_size(img: Image.Image, max_side: int = MAX_INPUT_SIDE) -> Image.Image:
+    """把過大的圖等比縮到最長邊 max_side 以內，降低記憶體與運算量。"""
+    w, h = img.size
+    m = max(w, h)
+    if m > max_side:
+        s = max_side / m
+        img = img.resize((max(1, round(w * s)), max(1, round(h * s))),
+                         Image.LANCZOS)
+    return img
+
+
 def open_normalized(uploaded_file) -> Image.Image:
     """
-    開啟上傳檔並正規化色彩模式。
+    開啟上傳檔並正規化色彩模式，並限制最大尺寸（省記憶體）。
     - TIFF 可能是 CMYK / 灰階 / LA / P（調色盤）等，統一轉成 rembg 可處理的模式。
     - 保留含透明度者為 RGBA，其餘轉為 RGB。
     """
     img = Image.open(uploaded_file)
     img.load()  # 先載入，避免延後讀取造成檔案指標問題
-    if img.mode in ("RGB", "RGBA"):
-        return img
     if img.mode in ("LA", "PA") or (img.mode == "P" and "transparency" in img.info):
-        return img.convert("RGBA")
-    return img.convert("RGB")  # CMYK / L / P 等一律轉 RGB
+        img = img.convert("RGBA")
+    elif img.mode not in ("RGB", "RGBA"):
+        img = img.convert("RGB")  # CMYK / L / P 等一律轉 RGB
+    return _limit_size(img)
 
 
 def flatten_to_white(rgba: Image.Image) -> Image.Image:
@@ -442,16 +460,18 @@ def remove_by_colors(img, colors, tol):
     適合純色/單一背景（如綠底貼圖）。回傳 RGBA。
     """
     rgb = img.convert("RGB")
-    arr = np.asarray(rgb).astype(np.float32)  # float 避免平方溢位
+    arr = np.asarray(rgb, dtype=np.int32)   # int32：不溢位、比 float 省記憶體
     h, w = arr.shape[:2]
     alpha = np.full((h, w), 255, np.uint8)
+    t2 = tol * tol                          # 比較平方距離，省去 sqrt 的大陣列
+    rr, gg, bb = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
     for (r, g, b) in colors:
-        dist = np.sqrt((arr[:, :, 0] - r) ** 2 +
-                       (arr[:, :, 1] - g) ** 2 +
-                       (arr[:, :, 2] - b) ** 2)
-        alpha[dist < tol] = 0
+        dist2 = (rr - r) ** 2 + (gg - g) ** 2 + (bb - b) ** 2
+        alpha[dist2 < t2] = 0
     rgba = rgb.convert("RGBA")
     rgba.putalpha(Image.fromarray(alpha, "L"))
+    del arr, rr, gg, bb
+    gc.collect()
     return rgba
 
 
