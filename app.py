@@ -20,6 +20,7 @@ import numpy as np
 import cv2
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 from PIL import Image, ImageDraw
 from rembg import remove, new_session
 from streamlit_image_coordinates import streamlit_image_coordinates
@@ -799,7 +800,8 @@ def image_to_bytes(img: Image.Image, fmt: str, icc: bytes = None) -> bytes:
 # Streamlit UI
 # ==================================================================
 st.set_page_config(page_title="PhotoStudio 去背排版工具",
-                   page_icon="📸", layout="wide")
+                   page_icon="📸", layout="wide",
+                   initial_sidebar_state="expanded")  # 初始展開側欄
 
 # 全站字級放大
 st.markdown("""
@@ -856,6 +858,30 @@ with st.sidebar:
                                 key="rembg_model_label")
     rembg_model = REMBG_MODELS[_model_label]
     st.caption("髮絲級最自然但較慢；isnet 品質好又快。首次使用該模型會先下載。")
+
+# 側欄：初始展開讓大家看到瀏覽/按讚數，60 秒後自動收合（可手動再打開）
+components.html(
+    """
+    <script>
+    (function(){
+      const doc = window.parent && window.parent.document;
+      if(!doc || doc.__ppAutoCollapse) return;   // 每個分頁只設一次
+      doc.__ppAutoCollapse = true;
+      setTimeout(function(){
+        const sel = ['[data-testid="stSidebarCollapseButton"] button',
+                     '[data-testid="stSidebarCollapseButton"]',
+                     '[data-testid="baseButton-headerNoPadding"]',
+                     '[data-testid="stSidebar"] button[kind="header"]'];
+        for(const s of sel){
+          const b = doc.querySelector(s);
+          if(b){ b.click(); break; }
+        }
+      }, 60000);
+    })();
+    </script>
+    """,
+    height=0,
+)
 
 # 功能選擇
 mode = st.radio(
