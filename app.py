@@ -67,12 +67,12 @@ _STAT_KEYS = ("views", "likes", "shares")
 
 
 def _api_get(key):
-    r = requests.get(f"{COUNTER_BASE}/get/{COUNTER_NS}/{key}", timeout=5)
+    r = requests.get(f"{COUNTER_BASE}/get/{COUNTER_NS}/{key}", timeout=2.5)
     return int(r.json().get("value", 0)) if r.status_code == 200 else 0
 
 
 def _api_hit(key):
-    r = requests.get(f"{COUNTER_BASE}/hit/{COUNTER_NS}/{key}", timeout=5)
+    r = requests.get(f"{COUNTER_BASE}/hit/{COUNTER_NS}/{key}", timeout=2.5)
     r.raise_for_status()
     return int(r.json().get("value", 0))
 
@@ -94,10 +94,15 @@ def _save_file(stats):
         pass
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def _fetch_stats():
+    return {k: _api_get(k) for k in _STAT_KEYS}
+
+
 def load_stats():
-    """讀取三個計數（優先計數服務，失敗則讀本機檔）。"""
+    """讀取三個計數（優先計數服務並快取30秒，失敗則讀本機檔）。"""
     try:
-        return {k: _api_get(k) for k in _STAT_KEYS}
+        return dict(_fetch_stats())
     except Exception:
         return _load_file()
 
