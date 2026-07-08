@@ -20,7 +20,6 @@ import numpy as np
 import cv2
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
 from PIL import Image, ImageDraw
 from rembg import remove, new_session
 from streamlit_image_coordinates import streamlit_image_coordinates
@@ -800,8 +799,7 @@ def image_to_bytes(img: Image.Image, fmt: str, icc: bytes = None) -> bytes:
 # Streamlit UI
 # ==================================================================
 st.set_page_config(page_title="PhotoStudio 去背排版工具",
-                   page_icon="📸", layout="wide",
-                   initial_sidebar_state="expanded")  # 初始展開側欄
+                   page_icon="📸", layout="wide")
 
 # 全站字級放大
 st.markdown("""
@@ -817,80 +815,42 @@ h3 { font-size: 1.6rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📸 PhotoStudio — AI 去背 × 尺寸排版")
-st.caption("護照大頭照 4x6 排版　|　LINE 貼圖規範輸出　·　300 DPI 印刷標準")
-
-# ----- 互動計數器（瀏覽 / 讚 / 分享）-----
-# 每個 session 只讀一次計數服務（避免每次互動都連網變慢），
-# 瀏覽在進站時 +1；按讚/分享點擊時 +1 並就地更新顯示。
+# ----- 計數初始化（每個 session 只讀一次；進站 +1 瀏覽）-----
 if "stats" not in st.session_state:
     st.session_state["stats"] = load_stats()
 if not st.session_state.get("counted_view"):
     st.session_state["counted_view"] = True
     st.session_state["stats"]["views"] = bump_stat("views")
 _stats = st.session_state["stats"]
-with st.sidebar:
-    st.header("📊 互動統計")
-    st.metric("👁️ 瀏覽人數", _stats["views"])
-    st.metric("👍 按讚數", _stats["likes"])
-    st.metric("🔗 分享次數", _stats["shares"])
-    _b1, _b2 = st.columns(2)
-    if _b1.button("👍 按讚", use_container_width=True):
-        if st.session_state.get("has_liked"):
-            st.toast("你已經按過讚了，謝謝！")
-        else:
-            st.session_state["has_liked"] = True
-            st.session_state["stats"]["likes"] = bump_stat("likes")
+
+# 標題（左）＋ 互動統計（右上角）
+_tcol, _scol = st.columns([2, 1])
+with _tcol:
+    st.title("📸 PhotoStudio — AI 去背 × 尺寸排版")
+    st.caption("護照大頭照 4x6 排版　|　LINE 貼圖規範輸出　·　300 DPI 印刷標準")
+with _scol:
+    with st.container(border=True):
+        st.markdown("**📊 互動統計**")
+        _m1, _m2, _m3 = st.columns(3)
+        _m1.metric("👁️ 瀏覽", _stats["views"])
+        _m2.metric("👍 讚", _stats["likes"])
+        _m3.metric("🔗 分享", _stats["shares"])
+        _b1, _b2 = st.columns(2)
+        if _b1.button("👍 按讚", use_container_width=True):
+            if st.session_state.get("has_liked"):
+                st.toast("你已經按過讚了，謝謝！")
+            else:
+                st.session_state["has_liked"] = True
+                st.session_state["stats"]["likes"] = bump_stat("likes")
+                st.rerun()
+        if _b2.button("🔗 分享", use_container_width=True):
+            st.session_state["stats"]["shares"] = bump_stat("shares")
+            st.session_state["show_share"] = True
             st.rerun()
-    if _b2.button("🔗 分享", use_container_width=True):
-        st.session_state["stats"]["shares"] = bump_stat("shares")
-        st.session_state["show_share"] = True
-        st.rerun()
-    if st.session_state.get("show_share"):
-        st.caption("複製下方網址分享：")
-        st.code("https://photostudio-ginohung.streamlit.app", language=None)
-
-    st.divider()
-    st.subheader("🪄 去背模型")
-    _mlabels = list(REMBG_MODELS.keys())
-    _default_idx = list(REMBG_MODELS.values()).index(DEFAULT_REMBG_MODEL)
-    _model_label = st.selectbox("品質 / 速度", _mlabels, index=_default_idx,
-                                key="rembg_model_label")
-    rembg_model = REMBG_MODELS[_model_label]
-    st.caption("髮絲級最自然但較慢；isnet 品質好又快。首次使用該模型會先下載。")
-
-# 側欄：初始展開讓大家看到瀏覽/按讚數，60 秒後自動收合（可手動再打開）
-components.html(
-    """
-    <script>
-    (function(){
-      var doc;
-      try { doc = window.parent.document; } catch(e){ return; }  // 沙箱擋住→放棄
-      if(!doc || doc.__ppAutoCollapse) return;   // 每個分頁只設定一次
-      doc.__ppAutoCollapse = true;
-      function collapse(){
-        var sels = [
-          'button[data-testid="stSidebarCollapseButton"]',
-          '[data-testid="stSidebarCollapseButton"] button',
-          '[data-testid="stSidebarCollapseButton"]',
-          '[data-testid="stSidebarHeader"] button',
-          '[data-testid="baseButton-headerNoPadding"]',
-          'section[data-testid="stSidebar"] button[kind="header"]'
-        ];
-        for(var i=0;i<sels.length;i++){
-          try{ var b = doc.querySelector(sels[i]); if(b){ b.click(); return true; } }catch(e){}
-        }
-        return false;
-      }
-      setTimeout(function(){
-        if(collapse()) return;
-        var n=0, t=setInterval(function(){ n++; if(collapse()||n>8) clearInterval(t); }, 1000);
-      }, 60000);
-    })();
-    </script>
-    """,
-    height=0,
-)
+        if st.session_state.get("show_share"):
+            st.caption("複製分享：")
+            st.code("https://huggingface.co/spaces/Ginohung/PhotoStudio",
+                    language=None)
 
 # 功能選擇
 mode = st.radio(
@@ -906,6 +866,18 @@ uploaded = st.file_uploader(
     type=["jpg", "jpeg", "png", "tif", "tiff"],
     accept_multiple_files=_multi,
 )
+
+# 去背模型（AI 去背時使用；移到主畫面）
+_mcol1, _mcol2 = st.columns([1, 1])
+with _mcol1:
+    _mlabels = list(REMBG_MODELS.keys())
+    _default_idx = list(REMBG_MODELS.values()).index(DEFAULT_REMBG_MODEL)
+    _model_label = st.selectbox("🪄 AI 去背模型（品質 / 速度）", _mlabels,
+                                index=_default_idx, key="rembg_model_label")
+    rembg_model = REMBG_MODELS[_model_label]
+with _mcol2:
+    st.caption("髮絲級最自然但較慢；isnet 品質好又快。"
+               "（只有選「AI 去背」時會用到；首次使用該模型會先下載。）")
 
 st.divider()
 
