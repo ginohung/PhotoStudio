@@ -155,10 +155,18 @@ def load_rembg_session(model_name: str):
 
 
 def remove_background(img: Image.Image,
-                      model_name: str = DEFAULT_REMBG_MODEL) -> Image.Image:
-    """對 PIL 影像去背，回傳帶透明通道的 RGBA 影像。"""
+                      model_name: str = DEFAULT_REMBG_MODEL,
+                      matting: bool = False) -> Image.Image:
+    """對 PIL 影像去背，回傳帶透明通道的 RGBA 影像。
+    matting=True 啟用 alpha matting 細修髮絲邊緣（較慢、較吃資源）。"""
     session = load_rembg_session(model_name)
-    out = remove(img, session=session).convert("RGBA")
+    if matting:
+        out = remove(img, session=session, alpha_matting=True,
+                     alpha_matting_foreground_threshold=250,
+                     alpha_matting_background_threshold=5,
+                     alpha_matting_erode_size=6).convert("RGBA")
+    else:
+        out = remove(img, session=session).convert("RGBA")
     gc.collect()
     return out
 
@@ -889,10 +897,12 @@ if mode.startswith("護照"):
 
     bg_method = st.radio(
         "去背方式",
-        ["AI 去背", "滴管取色去背（純色背景）", "不去背（相館已處理，直接排版）"],
+        ["AI 去背", "滴管取色去背（純色背景）",
+         "已去背（透明PNG，用外部去背成品）", "不去背（相館已處理，直接排版）"],
         horizontal=True, key="pp_bg_method")
     is_no_bg = bg_method.startswith("不去背")
     is_dropper = bg_method.startswith("滴管")
+    is_prebg = bg_method.startswith("已去背")
 
     if uploaded is None:
         st.info("請先於上方上傳一張人物照片。")
@@ -953,8 +963,25 @@ if mode.startswith("護照"):
                 pp_colors.clear()
                 st.rerun()
 
+        # 已去背模式：用外部去背成品，只檢查是否真的有透明背景
+        _has_alpha = (src.mode == "RGBA"
+                      and int(np.asarray(src.split()[-1]).min()) < 250)
+        if is_prebg:
+            st.caption("用你上傳的**透明 PNG**（在 photogrid 等工具去背好的成品）；"
+                       "本 App 不再去背，只做頭部定位與排版，完整保留你的去背品質。")
+            if not _has_alpha:
+                st.warning("⚠️ 這張圖沒有透明背景。請先用去背工具做成**透明 PNG** 再上傳，"
+                           "或改選「AI 去背 / 滴管」。")
+
+        # AI 模式：可選髮絲細修（alpha matting）
+        pp_matting = False
+        if not is_dropper and not is_prebg:
+            pp_matting = st.checkbox(
+                "🧵 髮絲細修（alpha matting，較慢、邊緣更柔）",
+                value=False, key="pp_matting")
+
         # 第一階段：去背 + 人臉偵測（結果存 session_state，避免調滑桿時重跑）
-        pp_key = (uploaded.name, bg_method)
+        pp_key = (uploaded.name, bg_method, pp_matting)
         need_run = st.session_state.get("pp_key") != pp_key
         btn_label = "🚀 開始去背並偵測人臉" if need_run else "🔄 重新去背偵測"
         if st.button(btn_label, type="primary"):
@@ -962,8 +989,10 @@ if mode.startswith("護照"):
                 if is_dropper:
                     rgba = (remove_by_colors(src, pp_colors, pp_tol)
                             if pp_colors else src.convert("RGBA"))
+                elif is_prebg:
+                    rgba = src.convert("RGBA")   # 直接用既有 alpha
                 else:
-                    rgba = remove_background(src, rembg_model)
+                    rgba = remove_background(src, rembg_model, matting=pp_matting)
                 metrics = detect_head_metrics(rgba)
             st.session_state["pp_rgba"] = rgba
             st.session_state["pp_metrics"] = metrics
