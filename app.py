@@ -864,18 +864,27 @@ components.html(
     """
     <script>
     (function(){
-      const doc = window.parent && window.parent.document;
-      if(!doc || doc.__ppAutoCollapse) return;   // 每個分頁只設一次
+      var doc;
+      try { doc = window.parent.document; } catch(e){ return; }  // 沙箱擋住→放棄
+      if(!doc || doc.__ppAutoCollapse) return;   // 每個分頁只設定一次
       doc.__ppAutoCollapse = true;
-      setTimeout(function(){
-        const sel = ['[data-testid="stSidebarCollapseButton"] button',
-                     '[data-testid="stSidebarCollapseButton"]',
-                     '[data-testid="baseButton-headerNoPadding"]',
-                     '[data-testid="stSidebar"] button[kind="header"]'];
-        for(const s of sel){
-          const b = doc.querySelector(s);
-          if(b){ b.click(); break; }
+      function collapse(){
+        var sels = [
+          'button[data-testid="stSidebarCollapseButton"]',
+          '[data-testid="stSidebarCollapseButton"] button',
+          '[data-testid="stSidebarCollapseButton"]',
+          '[data-testid="stSidebarHeader"] button',
+          '[data-testid="baseButton-headerNoPadding"]',
+          'section[data-testid="stSidebar"] button[kind="header"]'
+        ];
+        for(var i=0;i<sels.length;i++){
+          try{ var b = doc.querySelector(sels[i]); if(b){ b.click(); return true; } }catch(e){}
         }
+        return false;
+      }
+      setTimeout(function(){
+        if(collapse()) return;
+        var n=0, t=setInterval(function(){ n++; if(collapse()||n>8) clearInterval(t); }, 1000);
       }, 60000);
     })();
     </script>
