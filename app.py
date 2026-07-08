@@ -967,14 +967,26 @@ if mode.startswith("護照"):
                 metrics = detect_head_metrics(rgba)
             st.session_state["pp_rgba"] = rgba
             st.session_state["pp_metrics"] = metrics
+            # 預覽用低解析度副本（加快調滑桿的即時預覽；下載時才用全解析度）
+            _ps = min(1.0, 1100.0 / max(rgba.size))
+            st.session_state["pp_rgba_prev"] = (rgba.resize(
+                (max(1, round(rgba.size[0] * _ps)),
+                 max(1, round(rgba.size[1] * _ps))), Image.LANCZOS)
+                if _ps < 1.0 else rgba)
+            st.session_state["pp_prev_scale"] = _ps
             st.session_state["pp_name"] = uploaded.name
             st.session_state["pp_key"] = pp_key
+            st.session_state.pop("pp_dl", None)   # 清除舊的下載檔
 
         # 第二階段：已處理 → 顯示微調滑桿 + 即時預覽（不再重跑去背）
         if st.session_state.get("pp_key") == pp_key \
                 and "pp_rgba" in st.session_state:
-            rgba = st.session_state["pp_rgba"]
+            rgba = st.session_state["pp_rgba"]                    # 全解析度（下載用）
             metrics = st.session_state["pp_metrics"]
+            rgba_prev = st.session_state.get("pp_rgba_prev", rgba)  # 低解析度（預覽用）
+            _pscale = st.session_state.get("pp_prev_scale", 1.0)
+            metrics_prev = (None if metrics is None
+                            else {k: v * _pscale for k, v in metrics.items()})
 
             if metrics is None:
                 st.warning("⚠️ 未偵測到清晰正面人臉，改用預設置中定位。"
@@ -1032,8 +1044,9 @@ if mode.startswith("護照"):
             hshift = st.session_state["pp_hshift"]
             show_guide = st.checkbox("顯示定位輔助線（僅預覽，不會印出）", value=True)
 
+            # 即時預覽用低解析度來源（快）；下載時才用全解析度重算
             single, actual_cm = compose_id_photo(
-                rgba, metrics, photo_size, head_cm, gg["crown"],
+                rgba_prev, metrics_prev, photo_size, head_cm, gg["crown"],
                 corr_pct=corr_pct, vshift_mm=vshift, hshift_mm=hshift,
             )
 
@@ -1059,19 +1072,36 @@ if mode.startswith("護照"):
             sheet, count, cols, rows = build_4x6_sheet(
                 single, photo_size, edge_margin=0, spacing=0
             )
-            st.image(sheet, width=760, caption=f"4x6 排版（{count} 張）")
+            # 預覽用縮小圖（顯示快很多；下載仍用全解析度）
+            _disp = sheet.copy()
+            _disp.thumbnail((760, 760), Image.LANCZOS)
+            st.image(_disp, caption=f"4x6 排版（{count} 張）")
 
             st.info(f"共可排入 {count} 張（{cols} 欄 × {rows} 列，橫式，相片緊靠一刀裁）。")
 
-            data = image_to_bytes(sheet, out_fmt, icc=src.info.get("icc_profile"))
+            # 下載：按需產生，避免每次調滑桿都重新編碼整張大圖（大幅加快）
             mime = {"JPG": "image/jpeg", "TIFF": "image/tiff",
                     "PDF": "application/pdf"}[out_fmt]
-            st.download_button(
-                f"⬇️ 下載 4x6 排版（{out_fmt}）",
-                data=data,
-                file_name=f"passport_4x6_{size_key}.{out_fmt.lower()}",
-                mime=mime,
-            )
+            if st.button(f"🔽 產生下載檔（{out_fmt}，全解析度）", key="pp_gen",
+                         type="primary"):
+                with st.spinner("以全解析度產生檔案中…"):
+                    single_full, _ = compose_id_photo(
+                        rgba, metrics, photo_size, head_cm, gg["crown"],
+                        corr_pct=corr_pct, vshift_mm=vshift, hshift_mm=hshift)
+                    sheet_full, _, _, _ = build_4x6_sheet(
+                        single_full, photo_size, edge_margin=0, spacing=0)
+                    st.session_state["pp_dl"] = image_to_bytes(
+                        sheet_full, out_fmt, icc=src.info.get("icc_profile"))
+                    st.session_state["pp_dl_fmt"] = out_fmt
+            if st.session_state.get("pp_dl") is not None \
+                    and st.session_state.get("pp_dl_fmt") == out_fmt:
+                st.download_button(
+                    f"⬇️ 下載 4x6 排版（{out_fmt}）",
+                    data=st.session_state["pp_dl"],
+                    file_name=f"passport_4x6_{size_key}.{out_fmt.lower()}",
+                    mime=mime,
+                )
+                st.caption("（以最後一次「產生下載檔」的畫面為準；再調整請重新產生）")
 
 # ------------------------------------------------------------------
 # 分支 2：LINE 貼圖
